@@ -1,12 +1,10 @@
-import { Controller, Get, Logger, HttpException, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiExtraModels } from '@nestjs/swagger';
 import { Controller, Get, Inject, Logger, HttpException, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiExtraModels } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { StellarService } from '../stellar/stellar.service';
-import { HealthResponseDto, HealthChecksDto, DatabaseCheckDto, StellarCheckDto } from './dto/health-response.dto';
+import { HealthResponseDto, HealthChecksDto, DatabaseCheckDto, StellarCheckDto, QueueCheckDto, ExternalApisDto, ExternalApiCheckDto, DatabasePoolDto, DatabaseThroughputDto, RedisMemoryDto } from './dto/health-response.dto';
 
 // #191 — default floor below which the keeper account is considered too low
 // to reliably keep paying transaction fees. Overridable via
@@ -31,7 +29,7 @@ const AVIATIONSTACK_HEALTH_URL =
 
 @ApiTags('health')
 @Controller('health')
-@ApiExtraModels(HealthResponseDto, HealthChecksDto, DatabaseCheckDto, StellarCheckDto)
+@ApiExtraModels(HealthResponseDto, HealthChecksDto, DatabaseCheckDto, StellarCheckDto, QueueCheckDto, ExternalApisDto, ExternalApiCheckDto, DatabasePoolDto, DatabaseThroughputDto, RedisMemoryDto)
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
 
@@ -177,48 +175,104 @@ export class HealthController {
       this.logger.error(`Health check Open-Meteo failed: ${openMeteoError}`);
     }
 
+    // #466 — Redis memory usage monitoring
+    // Track Redis memory consumption to detect memory exhaustion before it
+    // causes failures. Redis INFO memory command returns current memory usage,
+    // peak usage, and configured max memory. Alert on high utilization.
+    let redisMemory: { used: string; peak: string; maxmemory: string; usagePercent?: number } | undefined;
+    try {
+      const memInfo = await this.redis.info('memory');
+      const lines = memInfo.split('\r\n');
+      const used = lines.find(l => l.startsWith('used_memory_human:'))?.split(':')[1] || 'unknown';
+      const peak = lines.find(l => l.startsWith('used_memory_peak_human:'))?.split(':')[1] || 'unknown';
+      const maxmemory = lines.find(l => l.startsWith('maxmemory_human:'))?.split(':')[1] || 'unknown';
+      const usedBytes = parseInt(lines.find(l => l.startsWith('used_memory:'))?.split(':')[1] || '0');
+      const maxBytes = parseInt(lines.find(l => l.startsWith('maxmemory:'))?.split(':')[1] || '0');
+      
+      redisMemory = { used, peak, maxmemory };
+      if (maxBytes > 0) {
+        redisMemory.usagePercent = Math.round((usedBytes / maxBytes) * 100);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to fetch Redis memory info: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // #463 — Database transaction throughput monitoring
+    // Track database transaction rate to detect performance degradation.
+    // pg_stat_database provides commit/rollback counters; delta between
+    // health checks gives throughput. Performance issues surface as
+    // declining commit rates or rising rollback ratios.
+    let dbThroughput: { commits: number; rollbacks: number; conflicts: number } | undefined;
+    try {
+      const [stats] = await this.prisma.$queryRaw<Array<{ xact_commit: bigint; xact_rollback: bigint; conflicts: bigint }>>`
+        SELECT xact_commit, xact_rollback, conflicts
+        FROM pg_stat_database
+        WHERE datname = current_database()
+      `;
+      if (stats) {
+        dbThroughput = {
+          commits: Number(stats.xact_commit),
+          rollbacks: Number(stats.xact_rollback),
+          conflicts: Number(stats.conflicts),
+        };
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to fetch database throughput stats: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const checks = {
+      database: {
+        status: dbStatus,
+        ...(dbPool !== undefined ? { pool: dbPool } : {}),
+        ...(dbThroughput !== undefined ? { throughput: dbThroughput } : {}),
+        ...(dbError ? { error: dbError } : {}),
+      },
+      stellar: {
+        status: stellarStatus,
+        ...(keeperBalanceXlm !== undefined ? { keeperBalanceXlm } : {}),
+        ...(stellarError ? { error: stellarError } : {}),
+      },
+      queue: {
+        status: queueStatus,
+        ...(queueDepths !== undefined ? { depth: queueDepths } : {}),
+        ...(redisMemory !== undefined ? { memory: redisMemory } : {}),
+        ...(queueError ? { error: queueError } : {}),
+      },
+      externalApis: {
+        openMeteo: {
+          status: openMeteoStatus,
+          ...(openMeteoError ? { error: openMeteoError } : {}),
+        },
+        ...(aviationStackConfigured !== undefined
+          ? {
+              aviationStack: {
+                status: aviationStackStatus,
+                configured: aviationStackConfigured,
+                ...(aviationStackError ? { error: aviationStackError } : {}),
+              },
+            }
+          : {}),
+      },
+    };
+
+    const healthy = 
+      dbStatus === 'ok' && 
+      stellarStatus === 'ok' && 
+      queueStatus === 'ok' &&
+      openMeteoStatus === 'ok' &&
+      aviationStackStatus === 'ok';
+
     const body: HealthResponseDto = {
       status:    healthy ? 'ok' : 'degraded',
       timestamp: new Date().toISOString(),
       service:   'parashield-api',
-      checks: {
-        database: {
-          status: dbStatus,
-          ...(dbPool !== undefined ? { pool: dbPool } : {}),
-          ...(dbError ? { error: dbError } : {}),
-        },
-        stellar: {
-          status: stellarStatus,
-          ...(keeperBalanceXlm !== undefined ? { keeperBalanceXlm } : {}),
-          ...(stellarError ? { error: stellarError } : {}),
-        },
-        queue: {
-          status: queueStatus,
-          ...(queueDepths !== undefined ? { depth: queueDepths } : {}),
-          ...(queueError ? { error: queueError } : {}),
-        },
-      },
+      checks: checks as any,
     };
 
     if (!healthy) {
-      throw new HttpException(
-        {
-          success:   false,
-          status:    'degraded',
-          timestamp: new Date().toISOString(),
-          service:   'parashield-api',
-          checks,
-        },
-        HttpStatus.SERVICE_UNAVAILABLE,
-      );
+      throw new HttpException(body, HttpStatus.SERVICE_UNAVAILABLE);
     }
 
-    return {
-      success:   true,
-      status:    'ok',
-      timestamp: new Date().toISOString(),
-      service:   'parashield-api',
-      checks,
-    };
+    return body;
   }
 }
