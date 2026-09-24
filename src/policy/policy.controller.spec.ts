@@ -14,6 +14,7 @@ describe("PolicyController", () => {
 
   const mockPolicyService = {
     getActiveProducts: jest.fn(),
+    getProductById: jest.fn(),
     getUserPolicies: jest.fn(),
     getPolicy: jest.fn(),
     validateCoverage: jest.fn().mockResolvedValue({ valid: true }),
@@ -455,20 +456,21 @@ describe("PolicyController", () => {
     ];
 
     it("returns a list of active products", async () => {
-      mockPolicyService.getActiveProducts.mockResolvedValue(MOCK_PRODUCTS);
+      const page = { data: MOCK_PRODUCTS, total: 1, page: 1, limit: 20 };
+      mockPolicyService.getActiveProducts.mockResolvedValue(page);
 
       const result = await controller.getProducts();
 
-      expect(mockPolicyService.getActiveProducts).toHaveBeenCalled();
-      expect(result).toEqual({ success: true, data: MOCK_PRODUCTS });
+      expect(mockPolicyService.getActiveProducts).toHaveBeenCalledWith(1, 20);
+      expect(result).toEqual({ success: true, ...page });
     });
 
     it("returns an empty array when no products are active", async () => {
-      mockPolicyService.getActiveProducts.mockResolvedValue([]);
+      mockPolicyService.getActiveProducts.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
 
       const result = await controller.getProducts();
 
-      expect(result).toEqual({ success: true, data: [] });
+      expect(result).toEqual({ success: true, data: [], total: 0, page: 1, limit: 20 });
     });
 
     it("has no auth guard registered (public endpoint)", () => {
@@ -502,7 +504,7 @@ describe("PolicyController", () => {
     } as AuthenticatedRequest;
 
     beforeEach(() => {
-      mockPolicyService.getActiveProducts.mockResolvedValue([MOCK_PRODUCT]);
+      mockPolicyService.getProductById.mockResolvedValue(MOCK_PRODUCT);
       mockPolicyService.validateCoverage.mockResolvedValue({ valid: true });
       mockPolicyService.validatePoolCapacity.mockResolvedValue(undefined);
       mockPolicyService.calculatePremium.mockReturnValue(75);
@@ -511,7 +513,9 @@ describe("PolicyController", () => {
     it("returns a premium quote when all inputs are valid", async () => {
       const result = await controller.buyPolicy(ownerReq, VALID_DTO);
 
-      expect(mockPolicyService.getActiveProducts).toHaveBeenCalled();
+      // #487 — single-product lookup, not a full catalogue scan
+      expect(mockPolicyService.getProductById).toHaveBeenCalledWith("prod-1");
+      expect(mockPolicyService.getActiveProducts).not.toHaveBeenCalled();
       expect(mockPolicyService.validateCoverage).toHaveBeenCalledWith(
         500, MOCK_PRODUCT, VALID_DTO.oracleKey,
       );
@@ -535,11 +539,11 @@ describe("PolicyController", () => {
       const dto = { ...VALID_DTO, walletAddress: "GOTHERWALLET0000000000000000000000000000000000" };
 
       await expect(controller.buyPolicy(ownerReq, dto)).rejects.toThrow(ForbiddenException);
-      expect(mockPolicyService.getActiveProducts).not.toHaveBeenCalled();
+      expect(mockPolicyService.getProductById).not.toHaveBeenCalled();
     });
 
     it("throws NotFoundException when product is not found or inactive", async () => {
-      mockPolicyService.getActiveProducts.mockResolvedValue([]);
+      mockPolicyService.getProductById.mockResolvedValue(null);
 
       await expect(controller.buyPolicy(ownerReq, VALID_DTO)).rejects.toThrow(NotFoundException);
     });
