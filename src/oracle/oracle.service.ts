@@ -161,13 +161,13 @@ export class OracleService {
     value: number,
     key: string,
   ): void {
-    const { min, max } = SANITY_BOUNDS[label];
-    if (!Number.isFinite(value) || value < min || value > max) {
+    const bounds = SANITY_BOUNDS[label];
+    if (!Number.isFinite(value) || value < bounds.min || value > bounds.max) {
       this.logger.error(
-        `Rejecting out-of-range ${label} value for key=${key}: ${value} (allowed ${min}..${max})`,
+        `Rejecting out-of-range ${label} value for key=${key}: ${value} (allowed ${bounds.min}..${bounds.max})`,
       );
       throw new ServiceUnavailableException(
-        `Upstream ${label} value ${value} is outside the plausible range ${min}..${max}`,
+        `Upstream ${label} value ${value} is outside the plausible range ${bounds.min}..${bounds.max}`,
       );
     }
   }
@@ -521,7 +521,21 @@ export class OracleService {
       }),
     );
     const key = `flight:${flightNumber}:${date}`;
-    const flight = res.data.data?.[0];
+    if (!res.data || !Array.isArray(res.data.data)) {
+      this.logger.warn(
+        `AviationStack returned unexpected response structure for ${key} — emitting NO_DATA with confidence 0`,
+      );
+      return {
+        dataType: "flight",
+        key,
+        value: "0",
+        confidence: 0,
+        timestamp: Math.floor(Date.now() / 1000),
+        source: "aviationstack",
+        status: "NO_DATA",
+      };
+    }
+    const flight = res.data.data[0];
     const delay = flight?.departure?.delay;
 
     // A missing flight or a null delay means "unknown", not "on time" (#171).
