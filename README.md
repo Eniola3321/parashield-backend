@@ -213,6 +213,8 @@ Check each entry in `error.message` for the field name and violated constraint.
 ### Rate limiting (429)
 
 The global throttle allows **60 requests per minute per IP**. When exceeded the response includes a `Retry-After` header with the number of seconds until the window resets. Clients should respect this header rather than retrying immediately.
+
+The client IP is taken from Express's `req.ip`. `X-Forwarded-For` is **only** honoured for proxies listed in `TRUST_PROXY` — by default none are trusted, so a client cannot bypass the limit by spoofing that header. When running behind a load balancer or reverse proxy, set `TRUST_PROXY` to the number of trusted hops (e.g. `1`) or a comma-separated list of proxy IPs/CIDRs (e.g. `loopback,10.0.0.0/8`), otherwise every request will appear to come from the proxy's address.
 Successful responses from guarded routes also include:
 
 - `X-RateLimit-Limit`
@@ -230,6 +232,15 @@ If you want to source secrets from HashiCorp Vault instead of environment variab
 - `VAULT_KV_PATH`
 
 When all three are present, the server fetches the KV secret before Nest bootstraps and merges the returned key/value pairs into `process.env`. The Vault payload should use the standard KV v2 shape (`data.data`).
+
+If none of the three are set, Vault is skipped. Once any of them is set, the server **fails fast** at startup (exit code 1, with the reason logged) instead of starting with missing secrets when:
+
+- only some of `VAULT_ADDR` / `VAULT_TOKEN` / `VAULT_KV_PATH` are set (the missing ones are named)
+- Vault is unreachable or does not answer within `VAULT_TIMEOUT_MS` (default `5000`)
+- Vault returns a non-2xx status (with hints for 403/404) or a payload without `data.data`
+- any key listed in the optional comma-separated `VAULT_REQUIRED_KEYS` is still unset after loading (the missing keys are named)
+
+On success the loaded key names (never values) are logged.
 
 ### OpenTelemetry tracing
 
