@@ -452,7 +452,7 @@ export class PolicyController {
 
       const unsubscribe = this.statusEvents.subscribeToPolicyStatus(id, (event) => {
         subscriber.next({ data: event });
-      });
+      }, authedWallet);
 
       // #491 — detect clients that went away without a clean close. The
       // periodic write fails once the peer is gone, and both that and a
