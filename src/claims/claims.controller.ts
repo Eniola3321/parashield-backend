@@ -125,12 +125,12 @@ export class ClaimsController {
     return { success: true, data: claim };
   }
 
-  /** GET /api/v1/claims/history/:wallet — get all claims for a wallet address */
+  /** GET /api/v1/claims/history/:wallet — deprecated alias of GET /api/v1/claims?wallet=... (#579) */
   @Get('history/:wallet')
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(StreamingInterceptor)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all claims for a wallet address' })
+  @ApiOperation({ summary: 'Get all claims for a wallet address', deprecated: true, description: 'Deprecated — use GET /claims?wallet=... instead.' })
   @ApiParam({ name: 'wallet', description: 'Stellar wallet address' })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (default 1)', example: 1 })
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page, max 100 (default 20)', example: 20 })

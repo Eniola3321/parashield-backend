@@ -512,7 +512,7 @@ this.statusEvents.emitPolicyStatusChange(policyId, PolicyStatus.ACTIVE);
 
   /** Manually submit a claim for a policy (initiated by policyholder). */
   async submitClaim(claimant: string, policyId: string): Promise<string> {
-    this.logger.log(`submit_claim: policy=${policyId} claimant=${claimant}`);
+    this.logger.log(`submit_claim: policy=${policyId} claimant=${claimant.slice(0, 4)}...${claimant.slice(-4)}`);
 
     // Policy ids are UUIDs — reject any other format before hitting the DB.
     if (!UUID_PATTERN.test(policyId)) {

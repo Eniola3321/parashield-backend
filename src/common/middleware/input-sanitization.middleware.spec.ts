@@ -22,11 +22,10 @@ describe('InputSanitizationMiddleware', () => {
     expect(run({ a: [{ b: '<b>' }] })).toEqual({ a: [{ b: '&lt;b&gt;' }] });
   });
 
-  // #485 — `&` and quotes are intentionally preserved so URLs, secrets and
-  // Stellar/oracle keys round-trip unchanged; output encoding is the
-  // rendering layer's job (see escapeHtml).
-  it('leaves & and quotes untouched so URLs and secrets are not corrupted', () => {
-    const url = 'https://hooks.example.com/cb?a=1&b="2"&c=\'3\'';
+  // #485 — `&` is intentionally preserved so URLs and secrets round-trip
+  // unchanged; output encoding is the rendering layer's job (see escapeHtml).
+  it('leaves & untouched so query strings are not corrupted', () => {
+    const url = 'https://hooks.example.com/cb?a=1&b=2';
     expect(run({ url })).toEqual({ url });
   });
 

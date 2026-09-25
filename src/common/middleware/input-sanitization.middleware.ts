@@ -18,13 +18,15 @@ const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
  *  - drops `__proto__`, `constructor` and `prototype` keys (#590)
  *  - escapes `<` and `>` so markup/script tags cannot survive into stored
  *    values and reflected responses (XSS)
+ *  - escapes `"` and `'` (#581) so stored values cannot break out of quoted
+ *    attribute or string contexts downstream
  *
- * Only angle brackets are escaped on purpose: values such as webhook URLs,
- * Stellar addresses, oracle keys, and HMAC secrets are reused server-side,
- * and full HTML-entity encoding (e.g. of `&` or quotes) would corrupt them.
+ * `&` is left alone on purpose: values such as webhook URLs, Stellar
+ * addresses, oracle keys, and HMAC secrets are reused server-side, and
+ * escaping it would corrupt query strings.
  *
- * #485 — this middleware is therefore NOT an output encoder. Stored strings
- * may still contain `&`, `"` and `'`, which are only safe inside JSON. The
+ * #485 — this middleware is still NOT a full output encoder. Stored strings
+ * may still contain `&`, which is only safe inside JSON. The
  * API itself only ever responds with `application/json` (helmet sets
  * `X-Content-Type-Options: nosniff` so browsers won't sniff it as HTML), and
  * any consumer that interpolates these values into HTML — the frontend, an
@@ -73,7 +75,12 @@ function sanitize(value: unknown, depth = 0): unknown {
 }
 
 function sanitizeString(value: string): string {
-  return value.trim().replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  return value
+    .trim()
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 const HTML_ESCAPES: Record<string, string> = {
