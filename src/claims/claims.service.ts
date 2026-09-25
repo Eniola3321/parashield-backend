@@ -1,4 +1,4 @@
-import { Injectable, Logger, ConflictException, NotFoundException, BadGatewayException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ConflictException, NotFoundException, BadGatewayException, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { nativeToScVal } from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service';
@@ -69,6 +69,17 @@ export class ClaimsService {
     private readonly statusEvents: StatusEventsService,
     private readonly webhooks: WebhooksService,
   ) {}
+
+  // #583 — reserves the next call slot synchronously, then waits for it, so
+  // concurrent callers are spaced CONTRACT_CALL_MIN_INTERVAL_MS apart.
+  private async waitForContractCallSlot(): Promise<void> {
+    const now = Date.now();
+    const slot = Math.max(now, this.nextContractCallAt);
+    this.nextContractCallAt = slot + CONTRACT_CALL_MIN_INTERVAL_MS;
+    if (slot > now) {
+      await new Promise<void>((resolve) => setTimeout(resolve, slot - now));
+    }
+  }
 
   // #350 — builds an auditLog.create() operation to append to a
   // $transaction([...]) array alongside the status-changing write itself,
@@ -288,6 +299,7 @@ this.auditOp('Claim', claim.id, ClaimStatus.PROCESSING, ClaimStatus.FAILED, 'Non
 
     let txHash: string;
     try {
+      await this.waitForContractCallSlot();
       txHash = await this.stellar.invokeContract(
         contractId,
         'process_claim',
@@ -495,6 +507,11 @@ this.statusEvents.emitPolicyStatusChange(policyId, PolicyStatus.ACTIVE);
   async submitClaim(claimant: string, policyId: string): Promise<string> {
     this.logger.log(`submit_claim: policy=${policyId} claimant=${claimant}`);
 
+    // Policy ids are UUIDs — reject any other format before hitting the DB.
+    if (!UUID_PATTERN.test(policyId)) {
+      throw new BadRequestException('policyId must be a valid UUID');
+    }
+
     // #371 — Resolve policy and validate ownership FIRST, before any status
     // or duplicate-claim probes. Running the duplicate guard with only a
     // policyId before ownership checks would let an authenticated stranger
@@ -567,6 +584,7 @@ this.statusEvents.emitPolicyStatusChange(policyId, PolicyStatus.ACTIVE);
     this.logger.log(`Claim record created: id=${claim.id} policyId=${policyId}`);
 
     try {
+      await this.waitForContractCallSlot();
       const txHash = await this.stellar.invokeContract(
         contractId,
         'submit_claim',

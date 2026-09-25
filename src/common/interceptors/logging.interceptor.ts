@@ -50,6 +50,13 @@ export class LoggingInterceptor implements NestInterceptor {
     const ctx     = context.switchToHttp();
     const request = ctx.getRequest<Request>();
     const { method, url } = request;
+
+    // Load balancer probes poll the health endpoint every few seconds; skip
+    // them so they don't drown out real request logs.
+    if (url.startsWith(HEALTH_PATH_PREFIX)) {
+      return next.handle();
+    }
+
     const startTime = Date.now();
     const safeUrl = this.sanitizeUrl(url);
 
