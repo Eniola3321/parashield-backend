@@ -453,25 +453,40 @@ export class PolicyController {
       const unsubscribe = this.statusEvents.subscribeToPolicyStatus(id, (event) => {
         subscriber.next({ data: event });
       }, authedWallet);
+        if (!subscriber.closed) {
+          subscriber.next({ data: event });
+        }
+      });
 
       // #491 — detect clients that went away without a clean close. The
       // periodic write fails once the peer is gone, and both that and a
       // normal disconnect fire 'close' on the request, which completes the
       // stream and runs the teardown below.
       const heartbeat = setInterval(() => {
-        subscriber.next({ type: 'heartbeat', data: { timestamp: Date.now() } });
+        if (!subscriber.closed) {
+          subscriber.next({ type: 'heartbeat', data: { timestamp: Date.now() } });
+        }
       }, SSE_HEARTBEAT_INTERVAL_MS);
       heartbeat.unref?.();
 
       req.socket?.setKeepAlive?.(true, SSE_TCP_KEEPALIVE_MS);
-      const onClose = () => subscriber.complete();
-      req.once?.('close', onClose);
 
-      return () => {
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         clearInterval(heartbeat);
         req.off?.('close', onClose);
         unsubscribe();
+        if (!subscriber.closed) {
+          subscriber.complete();
+        }
       };
+
+      const onClose = () => cleanup();
+      req.once?.('close', onClose);
+
+      return () => cleanup();
     });
   }
 }
